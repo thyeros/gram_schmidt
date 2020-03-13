@@ -23,7 +23,7 @@ __inline__ __device__ float warp_reduce(float val) {
   return val;
 }
 
-__global__ void gram_schmidt_scale(int m, int n, float* mat, int k) {
+__global__ void gram_schmidt_scale(int m, int n, float* mat, int k, int* ret) {
 
   int thread_idx = threadIdx.x + blockIdx.x * blockDim.x;
   int lane_idx   = thread_idx % WARP_SIZE;
@@ -51,20 +51,27 @@ __global__ void gram_schmidt_scale(int m, int n, float* mat, int k) {
   if (lane_idx == 0) r = sqrt(r);
   __syncwarp();
 
+  int is_zero = r < ZERO_THRESHOLD;
+
   cnt = 0;
   for (int w = 0; w < m; w += WARP_SIZE) {
     int i = w + lane_idx;
 
     if (i >= m)
       continue;
-    else if (r < ZERO_THRESHOLD)
+    else if (is_zero)
       mat[i * n + k] = 0;
     else
       mat[i * n + k] = a[cnt++] / r;
   }
+
+  if (ret)
+    *ret = is_zero;
 }
 
-__global__ void gram_schmidt_combine(int m, int n, float* mat, int k) {
+__global__ void gram_schmidt_combine(int m, int n, float* mat, int k, int* is_zero) {
+
+  if (is_zero && *is_zero) return;
 
   int thread_idx = threadIdx.x + blockIdx.x * blockDim.x;
   int warp_idx   = thread_idx / WARP_SIZE;
@@ -103,8 +110,12 @@ __global__ void gram_schmidt_combine(int m, int n, float* mat, int k) {
 
   __syncwarp();
 
-  cnt    = 0;
   auto r = s_r[warp_blk_idx];
+
+  if (r == 0)
+    return;
+
+  cnt = 0;
   for (int w = 0; w < m; w += WARP_SIZE) {
     int i = w + lane_idx;
 
@@ -115,9 +126,13 @@ __global__ void gram_schmidt_combine(int m, int n, float* mat, int k) {
 #endif
 
 void gram_schmidt_gpu(int m, int n, float* mat) {
+
+  int* is_zero;
+  cudaMalloc((void**)&is_zero, sizeof(int));
+
   for (int k = 0; k < n; ++k) {
-    gram_schmidt_scale<<<1, WARP_SIZE>>>(m, n, mat, k);
-    gram_schmidt_combine<<<(n - k) * WARP_SIZE / COMP_BLOCK_SIZE + 1, COMP_BLOCK_SIZE>>>(m, n, mat, k);
+    gram_schmidt_scale<<<1, WARP_SIZE>>>(m, n, mat, k, is_zero);
+    gram_schmidt_combine<<<(n - k) * WARP_SIZE / COMP_BLOCK_SIZE + 1, COMP_BLOCK_SIZE>>>(m, n, mat, k, is_zero);
   }
 }
 

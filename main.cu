@@ -13,8 +13,8 @@ int debug = 0;
 #ifdef _GPU_
 #include <cuda_runtime.h>
 #define WARP_SIZE (32)
-#define MAX_WARP_COUNT (32)
 #define COMP_BLOCK_SIZE (512)
+#define MAX_WARP_COUNT (32)
 
 __inline__ __device__ float warp_reduce(float val) {
 #pragma unroll
@@ -29,20 +29,29 @@ __global__ void gram_schmidt_scale(int m, int n, float* mat, int k) {
   int lane_idx   = thread_idx % WARP_SIZE;
 
   __shared__ float r;
+
   if (lane_idx == 0) r = 0;
 
+  float a[WARP_SIZE];
+
+  int cnt = 0;
   for (int w = 0; w < m; w += WARP_SIZE) {
     int i = w + lane_idx;
 
-    float val = (i >= m) ? 0 : mat[i * n + k];
-    val       = warp_reduce(val * val);
+    float val = 0;
+    if (i < m) {
+      val      = mat[i * n + k];
+      a[cnt++] = val;
+    }
 
+    val = warp_reduce(val * val);
     if (lane_idx == 0) r += val;
   }
 
   if (lane_idx == 0) r = sqrt(r);
   __syncwarp();
 
+  cnt = 0;
   for (int w = 0; w < m; w += WARP_SIZE) {
     int i = w + lane_idx;
 
@@ -51,7 +60,7 @@ __global__ void gram_schmidt_scale(int m, int n, float* mat, int k) {
     else if (r < ZERO_THRESHOLD)
       mat[i * n + k] = 0;
     else
-      mat[i * n + k] /= r;
+      mat[i * n + k] = a[cnt++] / r;
   }
 }
 
@@ -67,24 +76,40 @@ __global__ void gram_schmidt_combine(int m, int n, float* mat, int k) {
   int warp_blk_idx = threadIdx.x / WARP_SIZE;
 
   __shared__ float s_r[MAX_WARP_COUNT];
+  __shared__ float s_q[MAX_WARP_COUNT * WARP_SIZE];
+
   if (lane_idx == 0) s_r[warp_blk_idx] = 0;
 
+  if (thread_idx < m)
+    s_q[thread_idx] = mat[thread_idx * n + k];
+  __syncthreads();
+
+  float a[WARP_SIZE];
+
+  int cnt = 0;
   for (int w = 0; w < m; w += WARP_SIZE) {
     int i = w + lane_idx;
 
-    float val = (i >= m) ? 0 : mat[i * n + k] * mat[i * n + j];
-    val       = warp_reduce(val);
+    float val = 0;
+    if (i < m) {
+      val      = mat[i * n + j];
+      a[cnt++] = val;
+      val *= s_q[i];
+    }
 
+    val = warp_reduce(val);
     if (lane_idx == 0) s_r[warp_blk_idx] += val;
   }
 
   __syncwarp();
 
+  cnt    = 0;
   auto r = s_r[warp_blk_idx];
   for (int w = 0; w < m; w += WARP_SIZE) {
     int i = w + lane_idx;
-    if (i >= m) continue;
-    mat[i * n + j] -= r * mat[i * n + k];
+
+    if (i < m)
+      mat[i * n + j] = a[cnt++] - r * s_q[i];
   }
 }
 #endif

@@ -92,7 +92,7 @@ __global__ void gram_schmidt_combine(int m, int n, float* mat, int k) {
 void gram_schmidt_gpu(int m, int n, float* mat) {
   for (int k = 0; k < n; ++k) {
     gram_schmidt_scale<<<1, WARP_SIZE>>>(m, n, mat, k);
-    gram_schmidt_combine<<<(n - k) * WARP_SIZE / COMP_BLOCK_SIZE + 1, COMP_BLOCK_SIZE>>>(m, n, mat, k); 
+    gram_schmidt_combine<<<(n - k) * WARP_SIZE / COMP_BLOCK_SIZE + 1, COMP_BLOCK_SIZE>>>(m, n, mat, k);
   }
 }
 
@@ -227,7 +227,7 @@ int main(int argc, char* argv[]) {
     printf("==========GPU start==========\n");
     assert(m < 1024);
     auto start = std::chrono::high_resolution_clock::now();
-    gram_schmidt_gpu(m, n, b);
+    gram_schmidt_gpu(m, n, dev_b);
     auto stop = std::chrono::high_resolution_clock::now();
     std::cout << std::chrono::duration_cast<std::chrono::microseconds>(stop - start).count() << " usec" << std::endl;
   }
